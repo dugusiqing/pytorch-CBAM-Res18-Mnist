@@ -14,9 +14,10 @@ def input_transform():
         ToTensor(),  # 变成tensor
     ])
 def train_test_net(gpu, args):
+    ##随机种子
     torch.manual_seed(0)
     #####构造数据集
-    writer = SummaryWriter("./logs")
+    writer = SummaryWriter()
     train_dataset = torchvision.datasets.MNIST(root='./dataset/',
                                                train=True,
                                                transform=input_transform(),
@@ -31,9 +32,9 @@ def train_test_net(gpu, args):
                                            transform=input_transform(),
                                            download=True)
     test_loader = torch.utils.data.DataLoader(dataset=test_data,
-                                              batch_size=8,
+                                              batch_size=100,
                                               shuffle=True,
-                                              num_workers=8)
+                                              num_workers=2)
     print("test_loader end")
     #########构造网络，并且放到GPU上训练上
     net = resnet18(use_cbam=True, use_mixpool=True)
@@ -55,6 +56,7 @@ def train_test_net(gpu, args):
             images = images.cuda(non_blocking=True)
             labels = labels.cuda(non_blocking=True)
             outputs = net(images)
+            _, predict = torch.max(outputs, 1)
             loss = criterion(outputs, labels)
             optimizer.zero_grad()
             loss.backward()
@@ -69,14 +71,17 @@ def train_test_net(gpu, args):
                 print("Saving Model end")
             ##########每(total_step//100)次迭代，打印一次信息
             if (i +1) % (total_step//100) == 0 and gpu == 0:
-                print('Epoch [{}/{}], Step [{}/{}], Loss: {:.4f},Time:{}'.format(
+                print('Epoch [{}/{}],\tStep [{}/{}],\tLoss: {:.4f},\tTrain_Acc:{:.4f},\tTime:{}'.format(
                     epoch + 1,#当前epoch
                     args.epochs,#总的epoch
                     i + 1,#当前step
                     total_step,#当前epoch内总的step
                     running_loss/(total_step//100),#100个step的平均loss
-                    str(datetime.now() - start)))
+                    (predict == labels).sum().item() / labels.size(0),
+                    str(datetime.now() - start)
+                ))
                 writer.add_scalar('Train_Loss', running_loss/(total_step//100), epoch * len(train_loader) + i)
+                writer.add_scalar('Train_Acc', (predict == labels).sum().item() / labels.size(0), epoch * len(train_loader) + i)
                 #####每(total_step//100) step 清空一次
                 running_loss = 0.0
 
@@ -88,15 +93,17 @@ def train_test_net(gpu, args):
                 count = 0
                 with torch.no_grad():
                     for j, (images_test, labels_test) in enumerate(test_loader):
-                        images_test = images_test.cuda(non_blocking=True)
-                        labels_test = labels_test.cuda(non_blocking=True)
+                        images_test = images_test.cuda()
+                        labels_test = labels_test.cuda()
                         out = net(images_test)
                         _, pred = torch.max(out, 1)
                         ########记录每一次的测试精度
-                        writer.add_scalar('Val_Acc', (pred == labels_test).sum().item(), epoch * len(train_loader) + j)
+                        writer.add_scalar('Val_Acc', (pred == labels_test).sum().item()/labels_test.size(0), epoch * len(train_loader) + j)
                         correct += (pred == labels_test).sum().item()
                         total += labels_test.size(0)
-                        print('\t batch:{}, Time:{}\n'.format(count + 1,str(datetime.now() - start)))
+                        print('\t batch:{}, Time:{} Val_Acc:{:.4f}\n'.format(count + 1,
+                                                                             str(datetime.now() - start),
+                                                                             (pred == labels_test).sum().item()/labels_test.size(0)))
                         count += 1
                 ######计算整体测试集上的平均准确率
                 accuracy = float(correct) / total
